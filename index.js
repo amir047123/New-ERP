@@ -5,25 +5,25 @@ const mongoose = require("mongoose");
 const app = express();
 app.use(express.json());
 
-// Connect to MongoDB
+// MongoDB Connection
 mongoose
   .connect(process.env.MONGO_URI, {
     useNewUrlParser: true,
     useUnifiedTopology: true,
   })
-  .then(() => console.log("MongoDB connected"))
-  .catch((err) => console.log("MongoDB connection error:", err));
+  .then(() => console.log("✅ MongoDB connected"))
+  .catch((err) => console.log("❌ MongoDB connection error:", err));
 
-// Fingerprint Schema and Model
+// Fingerprint Schema
 const fingerprintSchema = new mongoose.Schema({
-  fingerprint_id: { type: String, required: true, unique: true },
+  fingerprint_id: { type: Number, unique: true },
   template: { type: String, required: true },
   createdAt: { type: Date, default: Date.now },
 });
 
 const Fingerprint = mongoose.model("Fingerprint", fingerprintSchema);
 
-// Function to calculate similarity (Hamming Distance)
+// ✅ Similarity Calculation (Hamming Distance)
 function calculateSimilarity(template1, template2) {
   const buffer1 = Buffer.from(template1, "base64");
   const buffer2 = Buffer.from(template2, "base64");
@@ -39,34 +39,43 @@ function calculateSimilarity(template1, template2) {
   return ((totalBits - diffCount) / totalBits) * 100;
 }
 
-// API: Save Fingerprint (Upsert Logic)
+// ✅ API: Fingerprint Registration
 app.post("/api/fingerprint", async (req, res) => {
   try {
-    const { fingerprint_id, template } = req.body;
+    const { template } = req.body;
 
-    if (!fingerprint_id || !template) {
+    if (!template) {
       return res
         .status(400)
-        .json({ message: "Missing fingerprint ID or template" });
+        .json({ message: "❌ Missing fingerprint template" });
     }
 
-    const updatedFingerprint = await Fingerprint.findOneAndUpdate(
-      { fingerprint_id },
-      { template, createdAt: Date.now() },
-      { upsert: true, new: true, setDefaultsOnInsert: true }
-    );
+    // Auto-generate fingerprint_id
+    const lastFingerprint = await Fingerprint.findOne().sort({
+      fingerprint_id: -1,
+    });
+    const newFingerprintId = lastFingerprint
+      ? lastFingerprint.fingerprint_id + 1
+      : 1;
+
+    const newFingerprint = new Fingerprint({
+      fingerprint_id: newFingerprintId,
+      template,
+    });
+
+    await newFingerprint.save();
 
     res.status(201).json({
-      message: "Fingerprint saved successfully",
-      data: updatedFingerprint,
+      message: "✅ Fingerprint registered successfully",
+      data: newFingerprint,
     });
   } catch (error) {
     console.error("Server Error:", error);
-    res.status(500).json({ message: "Server Error" });
+    res.status(500).json({ message: "❌ Server Error" });
   }
 });
 
-// API: Match Fingerprint
+// ✅ API: Fingerprint Matching
 app.post("/api/fingerprint/match", async (req, res) => {
   try {
     const { template } = req.body;
@@ -74,11 +83,10 @@ app.post("/api/fingerprint/match", async (req, res) => {
     if (!template) {
       return res
         .status(400)
-        .json({ message: "Missing fingerprint template for matching" });
+        .json({ message: "❌ Missing fingerprint template for matching" });
     }
 
     const fingerprints = await Fingerprint.find();
-
     let bestMatch = null;
     let highestSimilarity = 0;
 
@@ -91,38 +99,38 @@ app.post("/api/fingerprint/match", async (req, res) => {
     });
 
     if (highestSimilarity > 85) {
-      // Adjust the threshold as needed
       res.status(200).json({
-        message: "Fingerprint matched",
+        message: "✅ Fingerprint matched",
         similarity: `${highestSimilarity.toFixed(2)}%`,
         data: bestMatch,
       });
     } else {
       res.status(404).json({
-        message: "No matching fingerprint found",
+        message: "❌ No matching fingerprint found",
         similarity: `${highestSimilarity.toFixed(2)}%`,
       });
     }
   } catch (error) {
     console.error("Server Error:", error);
-    res.status(500).json({ message: "Server Error" });
+    res.status(500).json({ message: "❌ Server Error" });
   }
 });
 
-// API: Get All Fingerprints (For Postman Testing)
+// ✅ API: Get All Fingerprints
 app.get("/api/fingerprint", async (req, res) => {
   try {
     const fingerprints = await Fingerprint.find();
     res.status(200).json({
-      message: "All fingerprints retrieved successfully",
+      message: "✅ All fingerprints retrieved successfully",
       count: fingerprints.length,
       data: fingerprints,
     });
   } catch (error) {
     console.error("Server Error:", error);
-    res.status(500).json({ message: "Server Error" });
+    res.status(500).json({ message: "❌ Server Error" });
   }
 });
 
+// Server Initialization
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
