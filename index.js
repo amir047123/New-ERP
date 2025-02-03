@@ -109,5 +109,20 @@ app.post("/api/fingerprint/match", async (req, res) => {
   }
 });
 
+// API: Get All Fingerprints (For Postman Testing)
+app.get("/api/fingerprint", async (req, res) => {
+  try {
+    const fingerprints = await Fingerprint.find();
+    res.status(200).json({
+      message: "All fingerprints retrieved successfully",
+      count: fingerprints.length,
+      data: fingerprints,
+    });
+  } catch (error) {
+    console.error("Server Error:", error);
+    res.status(500).json({ message: "Server Error" });
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
