@@ -5,13 +5,6 @@ const mongoose = require("mongoose");
 const app = express();
 app.use(express.json());
 
-// Middleware to log all incoming requests
-app.use((req, res, next) => {
-  console.log(`📥 Incoming Request: ${req.method} ${req.originalUrl}`);
-  console.log(`Body: ${JSON.stringify(req.body)}`);
-  next();
-});
-
 // MongoDB Connection
 mongoose
   .connect(process.env.MONGO_URI, {
@@ -29,7 +22,14 @@ const fingerprintSchema = new mongoose.Schema({
 });
 const Fingerprint = mongoose.model("Fingerprint", fingerprintSchema);
 
-// Hamming Distance Algorithm for Better Accuracy
+// Attendance Schema
+const attendanceSchema = new mongoose.Schema({
+  fingerprint_id: { type: Number, required: true },
+  timestamp: { type: Date, default: Date.now },
+});
+const Attendance = mongoose.model("Attendance", attendanceSchema);
+
+// Hamming Distance Algorithm
 function calculateHammingDistance(template1, template2) {
   const buffer1 = Buffer.from(template1, "base64");
   const buffer2 = Buffer.from(template2, "base64");
@@ -37,13 +37,21 @@ function calculateHammingDistance(template1, template2) {
   const minLength = Math.min(buffer1.length, buffer2.length);
   if (minLength === 0) return 0;
 
-  let distance = 0;
+  let matchingBits = 0;
+  let totalBits = minLength * 8;
+
   for (let i = 0; i < minLength; i++) {
-    const xor = buffer1[i] ^ buffer2[i];
-    distance += xor.toString(2).split("1").length - 1; // Count the number of differing bits
+    const byte1 = buffer1[i];
+    const byte2 = buffer2[i];
+
+    // Count the number of matching bits (similar to Python's bitwise comparison)
+    const xor = byte1 ^ byte2;
+    const invertedXor = ~xor & 0xff; // Invert XOR to count matching bits (8-bit mask)
+
+    matchingBits += invertedXor.toString(2).split("1").length - 1;
   }
 
-  const similarity = 100 - (distance / (minLength * 8)) * 100; // Convert to percentage similarity
+  const similarity = (matchingBits / totalBits) * 100; // Percentage of matching bits
   return similarity;
 }
 
@@ -53,14 +61,12 @@ app.post("/api/fingerprint", async (req, res) => {
   console.log("🔑 Registration API Called");
 
   if (!template) {
-    console.log("❌ Missing template in request");
     return res.status(400).json({ message: "❌ Missing template" });
   }
 
   try {
     const existingFingerprint = await Fingerprint.findOne({ template });
     if (existingFingerprint) {
-      console.log("⚠️ Fingerprint already exists in DB");
       return res.status(409).json({ message: "❌ Fingerprint already exists" });
     }
 
@@ -77,23 +83,19 @@ app.post("/api/fingerprint", async (req, res) => {
     });
     await newFingerprint.save();
 
-    console.log(`✅ Fingerprint registered with ID: ${newFingerprintId}`);
     res
       .status(201)
       .json({ message: "✅ Fingerprint registered", data: newFingerprint });
   } catch (error) {
-    console.error("❌ Registration Error:", error);
     res.status(500).json({ message: "❌ Server error during registration" });
   }
 });
 
-// Fingerprint Matching API
-app.post("/api/fingerprint/match", async (req, res) => {
+// Attendance API
+app.post("/api/fingerprint/attendance", async (req, res) => {
   const { template } = req.body;
-  console.log("🔍 Matching API Called");
 
   if (!template) {
-    console.log("❌ Missing template in request");
     return res.status(400).json({ message: "❌ Missing template" });
   }
 
@@ -104,9 +106,6 @@ app.post("/api/fingerprint/match", async (req, res) => {
 
     fingerprints.forEach((record) => {
       const similarity = calculateHammingDistance(template, record.template);
-      console.log(
-        `Comparing with ID: ${record.fingerprint_id}, Similarity: ${similarity}%`
-      );
 
       if (similarity > highestSimilarity) {
         highestSimilarity = similarity;
@@ -114,31 +113,31 @@ app.post("/api/fingerprint/match", async (req, res) => {
       }
     });
 
-    const MATCH_THRESHOLD = 75; // Adjusted threshold for better sensitivity
-
-    console.log(`Best Match Similarity: ${highestSimilarity}%`);
+    const MATCH_THRESHOLD = 75;
 
     if (highestSimilarity >= MATCH_THRESHOLD) {
+      const attendance = new Attendance({
+        fingerprint_id: bestMatch.fingerprint_id,
+      });
+      await attendance.save();
+
       res.status(200).json({
-        message: "✅ Match found",
+        message: "✅ Attendance marked",
         similarity: `${highestSimilarity.toFixed(2)}%`,
-        confidence: highestSimilarity >= 90 ? "High" : "Moderate",
         data: bestMatch,
       });
     } else {
       res.status(404).json({
         message: "❌ No match",
         similarity: `${highestSimilarity.toFixed(2)}%`,
-        closestMatch: bestMatch ? bestMatch.fingerprint_id : "None",
       });
     }
   } catch (error) {
-    console.error("❌ Matching Error:", error);
-    res.status(500).json({ message: "❌ Server error during matching" });
+    res.status(500).json({ message: "❌ Server error during attendance" });
   }
 });
 
-// New API to Get All Fingerprints
+// Get All Fingerprints API
 app.get("/api/fingerprint/all", async (req, res) => {
   try {
     const fingerprints = await Fingerprint.find();
@@ -146,22 +145,19 @@ app.get("/api/fingerprint/all", async (req, res) => {
       .status(200)
       .json({ message: "✅ All fingerprints fetched", data: fingerprints });
   } catch (error) {
-    console.error("❌ Error fetching fingerprints:", error);
     res
       .status(500)
       .json({ message: "❌ Server error while fetching fingerprints" });
   }
 });
 
-// New API to Decode Base64 Template
+// Decode Fingerprint Template API
 app.get("/api/fingerprint/decode/:fingerprint_id", async (req, res) => {
   const { fingerprint_id } = req.params;
-  console.log(`🔍 Decoding API Called for ID: ${fingerprint_id}`);
 
   try {
     const fingerprint = await Fingerprint.findOne({ fingerprint_id });
     if (!fingerprint) {
-      console.log("❌ Fingerprint not found");
       return res.status(404).json({ message: "❌ Fingerprint not found" });
     }
 
@@ -170,31 +166,25 @@ app.get("/api/fingerprint/decode/:fingerprint_id", async (req, res) => {
       "base64"
     ).toString("hex");
 
-    console.log("✅ Template decoded successfully");
     res.status(200).json({
       message: "✅ Template decoded successfully",
       fingerprint_id: fingerprint.fingerprint_id,
       decoded_template: decodedTemplate,
     });
   } catch (error) {
-    console.error("❌ Decoding Error:", error);
     res.status(500).json({ message: "❌ Server error during decoding" });
   }
 });
 
-// API to Check the Status of Registration and Matching APIs
-app.get("/api/fingerprint/status", async (req, res) => {
+// API Status Check
+app.get("/api/fingerprint/status", (req, res) => {
   try {
-    const registrationStatus = "🟢 Registration API is live";
-    const matchingStatus = "🟢 Matching API is live";
-
     res.status(200).json({
       message: "✅ API Status Check",
-      registrationStatus,
-      matchingStatus,
+      registrationStatus: "🟢 Registration API is live",
+      matchingStatus: "🟢 Matching API is live",
     });
   } catch (error) {
-    console.error("❌ Error checking API status:", error);
     res.status(500).json({ message: "❌ Server error during status check" });
   }
 });

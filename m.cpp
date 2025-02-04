@@ -15,7 +15,7 @@ void displayMessage(const String& message, bool center = false);
 // WiFi Credentials & API URL
 const char* ssid = "Squad 06";
 const char* password = "yarasfm@2026";
-const char* apiURL = "https://new-erp-cyan.vercel.app/api/attendance"; // Updated API URL for attendance
+const char* apiURL = "https://new-erp-cyan.vercel.app/api/fingerprint/attendance"; // API for attendance
 
 // Fingerprint Sensor Initialization
 HardwareSerial mySerial(2);
@@ -34,16 +34,20 @@ void setup() {
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
     delay(1000);
+    Serial.println("Connecting to WiFi...");
   }
 
   displayMessage("WiFi Connected!", true);
+  Serial.println("WiFi Connected!");
   delay(2000);
 
   finger.begin(57600);
   if (finger.verifyPassword()) {
     displayMessage("Sensor Ready", true);
+    Serial.println("Fingerprint sensor ready!");
   } else {
     displayMessage("Sensor Error!", true);
+    Serial.println("Fingerprint sensor error!");
     while (1);
   }
 }
@@ -70,24 +74,9 @@ void displayMessage(const String& message, bool center) {
   u8g2.sendBuffer();
 }
 
-// Clear Fingerprint Sensor Data
-bool clearFingerprintBuffer() {
-  for (int attempt = 0; attempt < 3; attempt++) {
-    if (finger.emptyDatabase() == FINGERPRINT_OK) {
-      displayMessage("Buffer Cleared", true);
-      return true;
-    }
-    delay(500);
-  }
-  displayMessage("Clear Failed!", true);
-  return false;
-}
-
 // Fingerprint Registration
 void registerFingerprint() {
   displayMessage("Capturing...", true);
-
-  if (!clearFingerprintBuffer()) return;
 
   for (int attempt = 1; attempt <= 2; attempt++) {
     displayMessage("Scan #" + String(attempt), true);
@@ -161,13 +150,30 @@ void sendFingerprintToServer(const String& encodedTemplate) {
     String payload;
     serializeJson(doc, payload);
 
-    http.POST(payload);
-    http.end();
+    int httpResponseCode = http.POST(payload);
+    Serial.print("HTTP Response Code: ");
+    Serial.println(httpResponseCode);
 
+    if (httpResponseCode > 0) {
+      String response = http.getString();
+      Serial.print("Server Response: ");
+      Serial.println(response);
+
+      if (httpResponseCode == 200) {
+        displayMessage("Attendance Marked!", true);
+      } else {
+        displayMessage("Invalid Fingerprint!", true);
+      }
+    } else {
+      displayMessage("Attendance Failed!", true);
+      Serial.println("Attendance failed, check connection or server.");
+    }
+
+    http.end();
     mySerial.flush();
     while (mySerial.available()) mySerial.read();
-    displayMessage("Attendance Marked!", true); // Updated message for attendance
   } else {
     displayMessage("WiFi Error!", true);
+    Serial.println("WiFi not connected!");
   }
 }
