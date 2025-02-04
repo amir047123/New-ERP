@@ -1,15 +1,23 @@
-// Arduino Code
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <Adafruit_Fingerprint.h>
 #include <HardwareSerial.h>
 #include <Base64.h>
+#include <U8g2lib.h>
 
+// OLED Display Initialization
+U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
+
+// Function Prototype
+void displayMessage(const String& message, bool center = false);
+
+// WiFi Credentials & API URL
 const char* ssid = "Squad 06";
 const char* password = "yarasfm@2026";
 const char* apiURL = "https://new-erp-cyan.vercel.app/api/fingerprint";
 
+// Fingerprint Sensor Initialization
 HardwareSerial mySerial(2);
 Adafruit_Fingerprint finger = Adafruit_Fingerprint(&mySerial);
 
@@ -17,110 +25,149 @@ void setup() {
   Serial.begin(115200);
   mySerial.begin(57600, SERIAL_8N1, 16, 17);
 
+  // OLED Setup
+  u8g2.begin();
+  displayMessage("Welcome!", true);
+  delay(2000);
+
+  displayMessage("Connecting...", true);
   WiFi.begin(ssid, password);
-  Serial.print("Connecting to WiFi");
   while (WiFi.status() != WL_CONNECTED) {
     delay(1000);
-    Serial.print(".");
   }
-  Serial.println("\nConnected to WiFi!");
+
+  displayMessage("WiFi Connected!", true);
+  delay(2000);
 
   finger.begin(57600);
   if (finger.verifyPassword()) {
-    Serial.println("Fingerprint sensor initialized successfully!");
+    displayMessage("Sensor Ready", true);
   } else {
-    Serial.println("Failed to initialize fingerprint sensor.");
+    displayMessage("Sensor Error!", true);
     while (1);
   }
 }
 
 void loop() {
-  Serial.println("Press 'e' to enroll:");
-  if (Serial.available() && Serial.read() == 'e') {
-    enrollFingerprint();
+  displayMessage("Place Finger", true);
+
+  if (finger.getImage() == FINGERPRINT_OK) {
+    registerFingerprint();
+    delay(3000);
   }
-  delay(2000);
 }
 
-void enrollFingerprint() {
-  int id;
-  Serial.println("Enter ID (1-127):");
-  while (!Serial.available());
-  id = Serial.parseInt();
+// Display Message on OLED
+void displayMessage(const String& message, bool center) {
+  u8g2.clearBuffer();
+  u8g2.setFont(u8g2_font_ncenB08_tr);
+  if (center) {
+    int16_t x = (128 - u8g2.getStrWidth(message.c_str())) / 2;
+    u8g2.drawStr(x, 32, message.c_str());
+  } else {
+    u8g2.drawStr(0, 20, message.c_str());
+  }
+  u8g2.sendBuffer();
+}
 
-  Serial.println("Place your finger...");
-  while (finger.getImage() != FINGERPRINT_OK);
-  finger.image2Tz(1);
+// Clear Fingerprint Sensor Data
+bool clearFingerprintBuffer() {
+  for (int attempt = 0; attempt < 3; attempt++) {
+    if (finger.emptyDatabase() == FINGERPRINT_OK) {
+      displayMessage("Buffer Cleared", true);
+      return true;
+    }
+    delay(500);
+  }
+  displayMessage("Clear Failed!", true);
+  return false;
+}
 
-  Serial.println("Remove finger...");
-  delay(2000);
+// Fingerprint Registration
+void registerFingerprint() {
+  displayMessage("Capturing...", true);
 
-  Serial.println("Place the same finger again...");
-  while (finger.getImage() != FINGERPRINT_OK);
-  finger.image2Tz(2);
+  if (!clearFingerprintBuffer()) return;
 
-  if (finger.createModel() == FINGERPRINT_OK && finger.storeModel(id) == FINGERPRINT_OK) {
-    Serial.println("Fingerprint enrolled successfully!");
+  for (int attempt = 1; attempt <= 2; attempt++) {
+    displayMessage("Scan #" + String(attempt), true);
 
-    if (finger.loadModel(id) == FINGERPRINT_OK && finger.getModel() == FINGERPRINT_OK) {
-      uint8_t templateBuffer[512];
-      memset(templateBuffer, 0, sizeof(templateBuffer));
+    mySerial.flush();
+    delay(500);
 
-      int bytesRead = 0;
-      unsigned long startTime = millis();
+    int retries = 0;
+    while (finger.getImage() != FINGERPRINT_OK && retries < 3) {
+      retries++;
+      delay(1000);
+    }
 
-      while (bytesRead < 512 && (millis() - startTime) < 3000) {
-        if (mySerial.available()) {
-          templateBuffer[bytesRead++] = mySerial.read();
-        } else {
-          delay(5);
-        }
-      }
+    if (retries == 3) {
+      displayMessage("Scan Failed!", true);
+      return;
+    }
 
-      Serial.print("Raw Template Data (First 20 bytes): ");
-      for (int i = 0; i < 20; i++) {
-        Serial.print(templateBuffer[i], HEX);
-        Serial.print(" ");
-      }
-      Serial.println();
+    if (finger.image2Tz(attempt) != FINGERPRINT_OK) {
+      displayMessage("Conversion Error", true);
+      return;
+    }
+    delay(2000);
+  }
 
-      if (bytesRead == 512) {
-        Serial.println("Template downloaded successfully!");
-        String encodedTemplate = base64::encode(templateBuffer, bytesRead);
-        Serial.println("Encoded Template:");
-        Serial.println(encodedTemplate);
-        sendFingerprintData(id, encodedTemplate);
+  if (finger.createModel() != FINGERPRINT_OK) {
+    displayMessage("Model Error!", true);
+    return;
+  }
+
+  if (finger.getModel() == FINGERPRINT_OK) {
+    uint8_t templateBuffer[512] = {0};
+    mySerial.flush();
+    delay(100);
+
+    int bytesRead = 0;
+    unsigned long startTime = millis();
+    const int TIMEOUT = 5000;
+
+    while (bytesRead < 512 && (millis() - startTime) < TIMEOUT) {
+      if (mySerial.available()) {
+        templateBuffer[bytesRead++] = mySerial.read();
       } else {
-        Serial.print("Incomplete template data received. Bytes read: ");
-        Serial.println(bytesRead);
+        delay(5);
       }
+    }
+
+    if (bytesRead == 512) {
+      displayMessage("Template Ready!", true);
+
+      String encodedTemplate = base64::encode(templateBuffer, bytesRead);
+      sendFingerprintToServer(encodedTemplate);
     } else {
-      Serial.println("Failed to load fingerprint model.");
+      displayMessage("Download Error!", true);
     }
   } else {
-    Serial.println("Enrollment failed.");
+    displayMessage("Template Error!", true);
   }
 }
 
-void sendFingerprintData(int id, String encodedTemplate) {
+// Send Fingerprint Template to Server
+void sendFingerprintToServer(const String& encodedTemplate) {
   if (WiFi.status() == WL_CONNECTED) {
     HTTPClient http;
     http.begin(apiURL);
     http.addHeader("Content-Type", "application/json");
 
     StaticJsonDocument<512> doc;
-    doc["fingerprint_id"] = id;
     doc["template"] = encodedTemplate;
 
     String payload;
     serializeJson(doc, payload);
 
-    int httpResponseCode = http.POST(payload);
-    Serial.print("Server Response: ");
-    Serial.println(http.getString());
-
+    http.POST(payload);
     http.end();
+
+    mySerial.flush();
+    while (mySerial.available()) mySerial.read();
+    displayMessage("Upload Success!", true);
   } else {
-    Serial.println("WiFi not connected.");
+    displayMessage("WiFi Error!", true);
   }
 }
